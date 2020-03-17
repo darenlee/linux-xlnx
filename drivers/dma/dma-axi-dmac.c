@@ -1,10 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Driver for the Analog Devices AXI-DMAC core
  *
- * Copyright 2013-2015 Analog Devices Inc.
+ * Copyright 2013-2019 Analog Devices Inc.
  *  Author: Lars-Peter Clausen <lars@metafoo.de>
- *
- * Licensed under the GPL-2.
  */
 
 #include <linux/clk.h>
@@ -21,6 +20,7 @@
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
+#include <linux/fpga/adi-axi-common.h>
 
 #include <dt-bindings/dma/axi-dmac.h>
 
@@ -67,6 +67,8 @@
 #define AXI_DMAC_REG_DBG0		0x43c
 #define AXI_DMAC_REG_DBG1		0x440
 #define AXI_DMAC_REG_DBG2		0x444
+#define AXI_DMAC_REG_PARTIAL_XFER_LEN	0x44c
+#define AXI_DMAC_REG_PARTIAL_XFER_ID	0x450
 
 #define AXI_DMAC_CTRL_ENABLE		BIT(0)
 #define AXI_DMAC_CTRL_PAUSE		BIT(1)
@@ -76,6 +78,9 @@
 
 #define AXI_DMAC_FLAG_CYCLIC		BIT(0)
 #define AXI_DMAC_FLAG_LAST		BIT(1)
+#define AXI_DMAC_FLAG_PARTIAL_REPORT	BIT(2)
+
+#define AXI_DMAC_FLAG_PARTIAL_XFER_DONE BIT(31)
 
 #undef SPEED_TEST
 
@@ -90,13 +95,14 @@ struct axi_dmac_sg {
 	unsigned int dest_stride;
 	unsigned int src_stride;
 	unsigned int id;
-	bool last;
+	unsigned int partial_len;
 	bool schedule_when_free;
 };
 
 struct axi_dmac_desc {
 	struct virt_dma_desc vdesc;
 	bool cyclic;
+	bool have_partial_xfer;
 
 	unsigned int num_submitted;
 	unsigned int num_completed;
@@ -117,8 +123,10 @@ struct axi_dmac_chan {
 	unsigned int dest_type;
 
 	unsigned int max_length;
-	unsigned int align_mask;
+	unsigned int address_align_mask;
+	unsigned int length_align_mask;
 
+	bool hw_partial_xfer;
 	bool hw_cyclic;
 	bool hw_2d;
 };
@@ -181,14 +189,14 @@ static bool axi_dmac_check_len(struct axi_dmac_chan *chan, unsigned int len)
 {
 	if (len == 0)
 		return false;
-	if ((len & chan->align_mask) != 0) /* Not aligned */
+	if ((len & chan->length_align_mask) != 0) /* Not aligned */
 		return false;
 	return true;
 }
 
 static bool axi_dmac_check_addr(struct axi_dmac_chan *chan, dma_addr_t addr)
 {
-	if ((addr & chan->align_mask) != 0) /* Not aligned */
+	if ((addr & chan->address_align_mask) != 0) /* Not aligned */
 		return false;
 	return true;
 }
@@ -224,13 +232,13 @@ static void axi_dmac_start_transfer(struct axi_dmac_chan *chan)
 	}
 
 	desc->num_submitted++;
-	if (desc->num_submitted == desc->num_sgs) {
-		if (desc->cyclic) {
+	if (desc->num_submitted == desc->num_sgs ||
+	    desc->have_partial_xfer) {
+		if (desc->cyclic)
 			desc->num_submitted = 0; /* Start again */
-		} else {
+		else
 			chan->next_desc = NULL;
-			flags |= AXI_DMAC_FLAG_LAST;
-		}
+		flags |= AXI_DMAC_FLAG_LAST;
 	} else {
 		chan->next_desc = desc;
 	}
@@ -256,6 +264,9 @@ static void axi_dmac_start_transfer(struct axi_dmac_chan *chan)
 		desc->num_sgs == 1)
 		flags |= AXI_DMAC_FLAG_CYCLIC;
 
+	if (chan->hw_partial_xfer)
+		flags |= AXI_DMAC_FLAG_PARTIAL_REPORT;
+
 	axi_dmac_write(dmac, AXI_DMAC_REG_X_LENGTH, sg->x_len - 1);
 	axi_dmac_write(dmac, AXI_DMAC_REG_Y_LENGTH, sg->y_len - 1);
 	axi_dmac_write(dmac, AXI_DMAC_REG_FLAGS, flags);
@@ -268,6 +279,83 @@ static struct axi_dmac_desc *axi_dmac_active_desc(struct axi_dmac_chan *chan)
 		struct axi_dmac_desc, vdesc.node);
 }
 
+static inline unsigned int axi_dmac_total_sg_bytes(struct axi_dmac_chan *chan,
+	struct axi_dmac_sg *sg)
+{
+	if (chan->hw_2d)
+		return sg->x_len * sg->y_len;
+	else
+		return sg->x_len;
+}
+
+static void axi_dmac_dequeue_partial_xfers(struct axi_dmac_chan *chan)
+{
+	struct axi_dmac *dmac = chan_to_axi_dmac(chan);
+	struct axi_dmac_desc *desc;
+	struct axi_dmac_sg *sg;
+	u32 xfer_done, len, id, i;
+	bool found_sg;
+
+	do {
+		len = axi_dmac_read(dmac, AXI_DMAC_REG_PARTIAL_XFER_LEN);
+		id  = axi_dmac_read(dmac, AXI_DMAC_REG_PARTIAL_XFER_ID);
+
+		found_sg = false;
+		list_for_each_entry(desc, &chan->active_descs, vdesc.node) {
+			for (i = 0; i < desc->num_sgs; i++) {
+				sg = &desc->sg[i];
+				if (sg->id == AXI_DMAC_SG_UNUSED)
+					continue;
+				if (sg->id == id) {
+					desc->have_partial_xfer = true;
+					sg->partial_len = len;
+					found_sg = true;
+					break;
+				}
+			}
+			if (found_sg)
+				break;
+		}
+
+		if (found_sg) {
+			dev_dbg(dmac->dma_dev.dev,
+				"Found partial segment id=%u, len=%u\n",
+				id, len);
+		} else {
+			dev_warn(dmac->dma_dev.dev,
+				 "Not found partial segment id=%u, len=%u\n",
+				 id, len);
+		}
+
+		/* Check if we have any more partial transfers */
+		xfer_done = axi_dmac_read(dmac, AXI_DMAC_REG_TRANSFER_DONE);
+		xfer_done = !(xfer_done & AXI_DMAC_FLAG_PARTIAL_XFER_DONE);
+
+	} while (!xfer_done);
+}
+
+static void axi_dmac_compute_residue(struct axi_dmac_chan *chan,
+	struct axi_dmac_desc *active)
+{
+	struct dmaengine_result *rslt = &active->vdesc.tx_result;
+	unsigned int start = active->num_completed - 1;
+	struct axi_dmac_sg *sg;
+	unsigned int i, total;
+
+	rslt->result = DMA_TRANS_NOERROR;
+	rslt->residue = 0;
+
+	/*
+	 * We get here if the last completed segment is partial, which
+	 * means we can compute the residue from that segment onwards
+	 */
+	for (i = start; i < active->num_sgs; i++) {
+		sg = &active->sg[i];
+		total = axi_dmac_total_sg_bytes(chan, sg);
+		rslt->residue += (total - sg->partial_len);
+	}
+}
+
 static bool axi_dmac_transfer_done(struct axi_dmac_chan *chan,
 	unsigned int completed_transfers)
 {
@@ -278,6 +366,10 @@ static bool axi_dmac_transfer_done(struct axi_dmac_chan *chan,
 	active = axi_dmac_active_desc(chan);
 	if (!active)
 		return false;
+
+	if (chan->hw_partial_xfer &&
+	    (completed_transfers & AXI_DMAC_FLAG_PARTIAL_XFER_DONE))
+		axi_dmac_dequeue_partial_xfers(chan);
 
 	do {
 		sg = &active->sg[active->num_completed];
@@ -292,11 +384,16 @@ static bool axi_dmac_transfer_done(struct axi_dmac_chan *chan,
 			start_next = true;
 		}
 
-		if (active->num_completed == active->num_sgs) {
+		if (sg->partial_len)
+			axi_dmac_compute_residue(chan, active);
+
+		if (active->cyclic)
+			vchan_cyclic_callback(&active->vdesc);
+
+		if (active->num_completed == active->num_sgs ||
+		    sg->partial_len) {
 			if (active->cyclic) {
 				active->num_completed = 0; /* wrap around */
-				if (sg->last)
-					vchan_cyclic_callback(&active->vdesc);
 			} else {
 				list_del(&active->vdesc.node);
 				vchan_cookie_complete(&active->vdesc);
@@ -442,7 +539,7 @@ static struct axi_dmac_sg *axi_dmac_fill_linear_sg(struct axi_dmac_chan *chan,
 	num_segments = DIV_ROUND_UP(period_len, chan->max_length);
 	segment_size = DIV_ROUND_UP(period_len, num_segments);
 	/* Take care of alignment */
-	segment_size = ((segment_size - 1) | chan->align_mask) + 1;
+	segment_size = ((segment_size - 1) | chan->length_align_mask) + 1;
 
 	for (i = 0; i < num_periods; i++) {
 		len = period_len;
@@ -465,7 +562,6 @@ static struct axi_dmac_sg *axi_dmac_fill_linear_sg(struct axi_dmac_chan *chan,
 			sg->src_addr = addr;
 		sg->x_len = len;
 		sg->y_len = 1;
-		sg->last = true;
 		sg++;
 		addr += len;
 	}
@@ -488,7 +584,10 @@ static struct dma_async_tx_descriptor *axi_dmac_prep_slave_sg(
 	if (direction != chan->direction)
 		return NULL;
 
-	num_sgs = sg_nents_for_dma(sgl, sg_len, chan->max_length);
+	num_sgs = 0;
+	for_each_sg(sgl, sg, sg_len, i)
+		num_sgs += DIV_ROUND_UP(sg_dma_len(sg), chan->max_length);
+
 	desc = axi_dmac_alloc_desc(num_sgs);
 	if (!desc)
 		return NULL;
@@ -509,6 +608,21 @@ static struct dma_async_tx_descriptor *axi_dmac_prep_slave_sg(
 	desc->cyclic = false;
 
 	return vchan_tx_prep(&chan->vchan, &desc->vdesc, flags);
+}
+
+static int axi_dmac_device_config(struct dma_chan *c,
+			struct dma_slave_config *slave_config)
+{
+	struct axi_dmac_chan *chan = to_axi_dmac_chan(c);
+	struct axi_dmac *dmac = chan_to_axi_dmac(chan);
+
+	/* no configuration required, a sanity check is done instead */
+	if (slave_config->direction != chan->direction) {
+		dev_err(dmac->dma_dev.dev, "Direction not supported by this DMA Channel");
+		return -EINVAL;
+	}
+
+	return 0;
 }
 
 static struct dma_async_tx_descriptor *axi_dmac_prep_dma_cyclic(
@@ -538,7 +652,7 @@ static struct dma_async_tx_descriptor *axi_dmac_prep_dma_cyclic(
 		return NULL;
 
 	axi_dmac_fill_linear_sg(chan, direction, buf_addr, num_periods,
-		buf_len, desc->sg);
+		period_len, desc->sg);
 
 	desc->cyclic = true;
 
@@ -574,7 +688,7 @@ static struct dma_async_tx_descriptor *axi_dmac_prep_interleaved(
 
 	if (chan->hw_2d) {
 		if (!axi_dmac_check_len(chan, xt->sgl[0].size) ||
-		    !axi_dmac_check_len(chan, xt->numf))
+		    xt->numf == 0)
 			return NULL;
 		if (xt->sgl[0].size + dst_icg > chan->max_length ||
 		    xt->sgl[0].size + src_icg > chan->max_length)
@@ -610,6 +724,9 @@ static struct dma_async_tx_descriptor *axi_dmac_prep_interleaved(
 		desc->sg[0].y_len = 1;
 	}
 
+	if (flags & DMA_CYCLIC)
+		desc->cyclic = true;
+
 	return vchan_tx_prep(&chan->vchan, &desc->vdesc, flags);
 }
 
@@ -640,13 +757,15 @@ static bool axi_dmac_regmap_rdwr(struct device *dev, unsigned int reg)
 	case AXI_DMAC_REG_DEST_STRIDE:
 	case AXI_DMAC_REG_SRC_STRIDE:
 	case AXI_DMAC_REG_TRANSFER_DONE:
-	case AXI_DMAC_REG_ACTIVE_TRANSFER_ID :
+	case AXI_DMAC_REG_ACTIVE_TRANSFER_ID:
 	case AXI_DMAC_REG_STATUS:
 	case AXI_DMAC_REG_CURRENT_SRC_ADDR:
 	case AXI_DMAC_REG_CURRENT_DEST_ADDR:
 	case AXI_DMAC_REG_DBG0:
 	case AXI_DMAC_REG_DBG1:
 	case AXI_DMAC_REG_DBG2:
+	case AXI_DMAC_REG_PARTIAL_XFER_LEN:
+	case AXI_DMAC_REG_PARTIAL_XFER_ID:
 		return true;
 	default:
 		return false;
@@ -657,7 +776,7 @@ static const struct regmap_config axi_dmac_regmap_config = {
 	.reg_bits = 32,
 	.val_bits = 32,
 	.reg_stride = 4,
-	.max_register = AXI_DMAC_REG_DBG2,
+	.max_register = AXI_DMAC_REG_PARTIAL_XFER_ID,
 	.readable_reg = axi_dmac_regmap_rdwr,
 	.writeable_reg = axi_dmac_regmap_rdwr,
 };
@@ -705,7 +824,7 @@ static int axi_dmac_parse_chan_dt(struct device_node *of_chan,
 		return ret;
 	chan->dest_width = val / 8;
 
-	chan->align_mask = max(chan->dest_width, chan->src_width) - 1;
+	chan->address_align_mask = max(chan->dest_width, chan->src_width) - 1;
 
 	if (axi_dmac_dest_is_mem(chan) && axi_dmac_src_is_mem(chan))
 		chan->direction = DMA_MEM_TO_MEM;
@@ -719,61 +838,12 @@ static int axi_dmac_parse_chan_dt(struct device_node *of_chan,
 	return 0;
 }
 
-/* Support old binding */
-static int axi_dmac_parse_chan_dt_compat(struct device_node *of_node,
-	struct axi_dmac_chan *chan)
-{
-	struct device_node *of_chan;
-	u32 tmp;
-
-	of_chan = of_get_child_by_name(of_node, "dma-channel");
-	if (of_chan == NULL)
-		return -ENODEV;
-
-	tmp = 0;
-	of_property_read_u32(of_chan, "adi,type", &tmp);
-
-	switch (tmp) {
-	case 0:
-		chan->direction = DMA_DEV_TO_MEM;
-		chan->src_type = AXI_DMAC_BUS_TYPE_AXI_STREAM;
-		chan->dest_type = AXI_DMAC_BUS_TYPE_AXI_MM;
-		break;
-	case 1:
-		chan->direction = DMA_MEM_TO_DEV;
-		chan->src_type = AXI_DMAC_BUS_TYPE_AXI_MM;
-		chan->dest_type = AXI_DMAC_BUS_TYPE_AXI_STREAM;
-		break;
-	case 2:
-		chan->direction = DMA_MEM_TO_MEM;
-		chan->src_type = AXI_DMAC_BUS_TYPE_AXI_MM;
-		chan->dest_type = AXI_DMAC_BUS_TYPE_AXI_MM;
-		break;
-	case 3:
-		chan->direction = DMA_DEV_TO_DEV;
-		chan->src_type = AXI_DMAC_BUS_TYPE_AXI_STREAM;
-		chan->dest_type = AXI_DMAC_BUS_TYPE_AXI_STREAM;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	tmp = 64;
-	of_property_read_u32(of_chan, "adi,source-bus-width", &tmp);
-	chan->src_width = tmp / 8;
-
-	tmp = 64;
-	of_property_read_u32(of_chan, "adi,destination-bus-width", &tmp);
-	chan->dest_width = tmp / 8;
-
-	chan->align_mask = max(chan->dest_width, chan->src_width) - 1;
-
-	return 0;
-}
-
 static int axi_dmac_detect_caps(struct axi_dmac *dmac)
 {
 	struct axi_dmac_chan *chan = &dmac->chan;
+	unsigned int version;
+
+	version = axi_dmac_read(dmac, ADI_AXI_REG_VERSION);
 
 	axi_dmac_write(dmac, AXI_DMAC_REG_FLAGS, AXI_DMAC_FLAG_CYCLIC);
 	if (axi_dmac_read(dmac, AXI_DMAC_REG_FLAGS) == AXI_DMAC_FLAG_CYCLIC)
@@ -802,6 +872,17 @@ static int axi_dmac_detect_caps(struct axi_dmac *dmac)
 		dev_err(dmac->dma_dev.dev,
 			"Source memory-mapped interface not supported.");
 		return -ENODEV;
+	}
+
+	if (version >= ADI_AXI_PCORE_VER(4, 2, 'a'))
+		chan->hw_partial_xfer = true;
+
+	if (version >= ADI_AXI_PCORE_VER(4, 1, 'a')) {
+		axi_dmac_write(dmac, AXI_DMAC_REG_X_LENGTH, 0x00);
+		chan->length_align_mask =
+			axi_dmac_read(dmac, AXI_DMAC_REG_X_LENGTH);
+	} else {
+		chan->length_align_mask = chan->address_align_mask;
 	}
 
 	return 0;
@@ -837,21 +918,18 @@ static int axi_dmac_probe(struct platform_device *pdev)
 	INIT_LIST_HEAD(&dmac->chan.active_descs);
 
 	of_channels = of_get_child_by_name(pdev->dev.of_node, "adi,channels");
-	if (of_channels == NULL) {
-		ret = axi_dmac_parse_chan_dt_compat(pdev->dev.of_node, &dmac->chan);
-		if (ret)
-			return ret;
-	} else {
-		for_each_child_of_node(of_channels, of_chan) {
-			ret = axi_dmac_parse_chan_dt(of_chan, &dmac->chan);
-			if (ret) {
-				of_node_put(of_chan);
-				of_node_put(of_channels);
-				return -EINVAL;
-			}
+	if (of_channels == NULL)
+		return -ENODEV;
+
+	for_each_child_of_node(of_channels, of_chan) {
+		ret = axi_dmac_parse_chan_dt(of_chan, &dmac->chan);
+		if (ret) {
+			of_node_put(of_chan);
+			of_node_put(of_channels);
+			return -EINVAL;
 		}
-		of_node_put(of_channels);
 	}
+	of_node_put(of_channels);
 
 	pdev->dev.dma_parms = &dmac->dma_parms;
 	dma_set_max_seg_size(&pdev->dev, UINT_MAX);
@@ -859,10 +937,12 @@ static int axi_dmac_probe(struct platform_device *pdev)
 	dma_dev = &dmac->dma_dev;
 	dma_cap_set(DMA_SLAVE, dma_dev->cap_mask);
 	dma_cap_set(DMA_CYCLIC, dma_dev->cap_mask);
+	dma_cap_set(DMA_INTERLEAVE, dma_dev->cap_mask);
 	dma_dev->device_free_chan_resources = axi_dmac_free_chan_resources;
 	dma_dev->device_tx_status = dma_cookie_status;
 	dma_dev->device_issue_pending = axi_dmac_issue_pending;
 	dma_dev->device_prep_slave_sg = axi_dmac_prep_slave_sg;
+	dma_dev->device_config = axi_dmac_device_config;
 	dma_dev->device_prep_dma_cyclic = axi_dmac_prep_dma_cyclic;
 	dma_dev->device_prep_interleaved_dma = axi_dmac_prep_interleaved;
 	dma_dev->device_terminate_all = axi_dmac_terminate_all;
@@ -886,6 +966,8 @@ static int axi_dmac_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_clk_disable;
 
+	dma_dev->copy_align = (dmac->chan.address_align_mask + 1);
+
 	axi_dmac_write(dmac, AXI_DMAC_REG_IRQ_MASK, 0x00);
 
 	ret = dma_async_device_register(dma_dev);
@@ -897,7 +979,7 @@ static int axi_dmac_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_unregister_device;
 
-	ret = request_irq(dmac->irq, axi_dmac_interrupt_handler, 0,
+	ret = request_irq(dmac->irq, axi_dmac_interrupt_handler, IRQF_SHARED,
 		dev_name(&pdev->dev), dmac);
 	if (ret)
 		goto err_unregister_of;

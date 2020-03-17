@@ -2,6 +2,7 @@
 
 /include/ "zynq-zc706.dtsi"
 /include/ "zynq-zc706-adv7511.dtsi"
+#include <dt-bindings/gpio/gpio.h>
 
 &i2c_mux {
 	i2c@5 { /* HPC IIC */
@@ -34,9 +35,17 @@
 		interrupts = <0 57 0>;
 		clocks = <&clkc 16>;
 
-		dma-channel {
-			adi,buswidth = <64>;
-			adi,type = <0>;
+		adi,channels {
+			#size-cells = <0>;
+			#address-cells = <1>;
+
+			dma-channel@0 {
+				reg = <0>;
+				adi,source-bus-width = <64>;
+				adi,source-bus-type = <2>;
+				adi,destination-bus-width = <64>;
+				adi,destination-bus-type = <0>;
+			};
 		};
 	};
 
@@ -47,9 +56,17 @@
 		interrupts = <0 55 0>;
 		clocks = <&clkc 16>;
 
-		dma-channel {
-			adi,buswidth = <64>;
-			adi,type = <0>;
+		adi,channels {
+			#size-cells = <0>;
+			#address-cells = <1>;
+
+			dma-channel@0 {
+				reg = <0>;
+				adi,source-bus-width = <64>;
+				adi,source-bus-type = <2>;
+				adi,destination-bus-width = <64>;
+				adi,destination-bus-type = <0>;
+			};
 		};
 	};
 
@@ -60,10 +77,17 @@
 		interrupts = <0 56 0>;
 		clocks = <&clkc 16>;
 
-		dma-channel {
-			adi,buswidth = <128>;
-			adi,type = <1>;
-			adi,cyclic;
+		adi,channels {
+			#size-cells = <0>;
+			#address-cells = <1>;
+
+			dma-channel@0 {
+				reg = <0>;
+				adi,source-bus-width = <64>;
+				adi,source-bus-type = <0>;
+				adi,destination-bus-width = <128>;
+				adi,destination-bus-type = <1>;
+			};
 		};
 	};
 
@@ -73,6 +97,8 @@
 		dmas = <&rx_dma 0>;
 		dma-names = "rx";
 		spibus-connected = <&trx0_ad9371>;
+		adi,axi-decimation-core-available;
+		decimation-gpios = <&gpio0 115 GPIO_ACTIVE_HIGH>;
 	};
 
 	axi_ad9371_core_rx_obs: axi-ad9371-rx-obs-hpc@44a08000 {
@@ -93,6 +119,8 @@
 		clock-names = "sampl_clk";
 		spibus-connected = <&trx0_ad9371>;
 		adi,axi-pl-fifo-enable;
+		adi,axi-interpolation-core-available;
+		interpolation-gpios = <&gpio0 116 GPIO_ACTIVE_HIGH>;
 	};
 
 	axi_ad9371_rx_jesd: axi-jesd204-rx@44aa0000 {

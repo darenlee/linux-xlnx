@@ -9,7 +9,7 @@
 #include "zynqmp-zcu102-rev1.0.dts"
 
 &i2c1 {
-	i2cswitch@75 {
+	i2c-mux@75 {
 		i2c@0 {
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -33,13 +33,13 @@
 	fpga_axi: fpga-axi@0 {
 		interrupt-parent = <&gic>;
 		compatible = "simple-bus";
-		#address-cells = <0x2>;
+		#address-cells = <0x1>;
 		#size-cells = <0x1>;
-		ranges = <0 0 0 0 0xffffffff>;
+		ranges = <0 0 0 0xffffffff>;
 
 		rx_dma: dma@9c400000 {
 			compatible = "adi,axi-dmac-1.00.a";
-			reg = <0x0 0x9c400000 0x10000>;
+			reg = <0x9c400000 0x10000>;
 			#dma-cells = <1>;
 			#clock-cells = <0>;
 			interrupts = <0 109 0>;
@@ -55,14 +55,13 @@
 					adi,source-bus-type = <2>;
 					adi,destination-bus-width = <64>;
 					adi,destination-bus-type = <0>;
-					adi,length-width = <24>;
 				};
 			};
 		};
 
 		tx_dma: dma@9c420000  {
 			compatible = "adi,axi-dmac-1.00.a";
-			reg = <0x0 0x9c420000 0x10000>;
+			reg = <0x9c420000 0x10000>;
 			#dma-cells = <1>;
 			#clock-cells = <0>;
 			interrupts = <0 108 0>;
@@ -78,15 +77,13 @@
 					adi,source-bus-type = <0>;
 					adi,destination-bus-width = <128>;
 					adi,destination-bus-type = <2>;
-					adi,length-width = <24>;
-					adi,cyclic;
 				};
 			};
 		};
 
 		axi_ad9144_core: axi-ad9144-hpc@84a04000{
 			compatible = "adi,axi-ad9144-1.0";
-			reg = <0x0 0x84a04000 0x10000>;
+			reg = <0x84a04000 0x10000>;
 			dmas = <&tx_dma 0>;
 			dma-names = "tx";
 			spibus-connected = <&dac0_ad9144>;
@@ -95,11 +92,11 @@
 
 		axi_ad9144_jesd: axi-jesd204-tx@84a90000 {
 			compatible = "adi,axi-jesd204-tx-1.0";
-			reg = <0x0 0x84a90000 0x4000>;
+			reg = <0x84a90000 0x4000>;
 
-			interrupts = <0 54 0>;
+			interrupts = <0 106 0>;
 
-			clocks = <&clk 16>, <&axi_ad9144_adxcvr 1>, <&axi_ad9144_adxcvr 0>;
+			clocks = <&clk 71>, <&axi_ad9144_adxcvr 1>, <&axi_ad9144_adxcvr 0>;
 			clock-names = "s_axi_aclk", "device_clk", "lane_clk";
 
 			adi,octets-per-frame = <1>;
@@ -114,7 +111,7 @@
 
 		axi_ad9680_core: axi-ad9680-hpc@84a10000 {
 			compatible = "adi,axi-ad9680-1.0";
-			reg = <0x0 0x84a10000 0x10000>;
+			reg = <0x84a10000 0x10000>;
 			dmas = <&rx_dma 0>;
 			dma-names = "rx";
 			spibus-connected = <&adc0_ad9680>;
@@ -122,11 +119,11 @@
 
 		axi_ad9680_jesd: axi-jesd204-rx@84aa0000 {
 			compatible = "adi,axi-jesd204-rx-1.0";
-			reg = <0x0 0x84aa0000 0x4000>;
+			reg = <0x84aa0000 0x4000>;
 
-			interrupts = <0 55 0>;
+			interrupts = <0 107 0>;
 
-			clocks = <&clk 16>, <&axi_ad9680_adxcvr 1>, <&axi_ad9680_adxcvr 0>;
+			clocks = <&clk 71>, <&axi_ad9680_adxcvr 1>, <&axi_ad9680_adxcvr 0>;
 			clock-names = "s_axi_aclk", "device_clk", "lane_clk";
 
 			adi,octets-per-frame = <1>;
@@ -136,9 +133,9 @@
 			clock-output-names = "jesd_adc_lane_clk";
 		};
 
-		axi_ad9680_adxcvr: axi-ad9680-adxcvr@84a50000{
+		axi_ad9680_adxcvr: axi-adxcvr-rx@84a50000{
 			compatible = "adi,axi-adxcvr-1.0";
-			reg = <0x0 0x84A50000 0x1000>;
+			reg = <0x84A50000 0x1000>;
 
 			clocks = <&clk0_ad9523 4>;
 			clock-names = "conv";
@@ -152,9 +149,9 @@
 			adi,use-cpll-enable;
 		};
 
-		axi_ad9144_adxcvr: axi-ad9144-adxcvr@84a60000{
+		axi_ad9144_adxcvr: axi-adxcvr-tx@84a60000{
 			compatible = "adi,axi-adxcvr-1.0";
-			reg = <0x0 0x84A60000 0x1000>;
+			reg = <0x84A60000 0x1000>;
 
 			clocks = <&clk0_ad9523 9>;
 			clock-names = "conv";
@@ -166,12 +163,22 @@
 			adi,out-clk-select = <4>;
 			adi,use-lpm-enable;
 		};
+
+		axi_sysid_0: axi-sysid-0@85000000 {
+			compatible = "adi,axi-sysid-1.00.a";
+			reg = <0x85000000 0x10000>;
+		};
 	};
 };
 
 
 &spi0 {
 	status = "okay";
+};
+
+&dwc3_0 {
+	status = "okay";
+	dr_mode = "otg";
 };
 
 #define fmc_spi spi0

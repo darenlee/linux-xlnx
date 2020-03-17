@@ -274,8 +274,8 @@ static int adp5061_get_max_voltage(struct adp5061_state *st,
 		return ret;
 
 	regval = ((regval & ADP5061_TERM_SET_VTRM_MSK) >> 2) - 0x0F;
-	if (regval > ARRAY_SIZE(adp5061_vmax))
-		regval = ARRAY_SIZE(adp5061_vmax);
+	if (regval >= ARRAY_SIZE(adp5061_vmax))
+		regval = ARRAY_SIZE(adp5061_vmax) - 1;
 
 	val->intval = adp5061_vmax[regval] * 1000;
 
@@ -352,8 +352,8 @@ static int adp5061_get_const_chg_current(struct adp5061_state *st,
 		return ret;
 
 	regval = ((regval & ADP5061_CHG_CURR_ICHG_MSK) >> 2);
-	if (regval > ARRAY_SIZE(adp5061_const_ichg))
-		regval = ARRAY_SIZE(adp5061_const_ichg);
+	if (regval >= ARRAY_SIZE(adp5061_const_ichg))
+		regval = ARRAY_SIZE(adp5061_const_ichg) - 1;
 
 	val->intval = adp5061_const_ichg[regval] * 1000;
 
@@ -700,9 +700,9 @@ static const struct power_supply_desc adp5061_desc = {
 	.num_properties		= ARRAY_SIZE(adp5061_props),
 };
 
-static int adp5061_get_charging_enabled(struct device *dev,
-					struct device_attribute *attr,
-					char *buf)
+static ssize_t adp5061_get_charging_enabled(struct device *dev,
+					    struct device_attribute *attr,
+					    char *buf)
 {
 	struct power_supply *psy = dev_get_drvdata(dev);
 	struct adp5061_state *st = power_supply_get_drvdata(psy);
@@ -717,9 +717,9 @@ static int adp5061_get_charging_enabled(struct device *dev,
 	return sprintf(buf, "%d\n", regval);
 }
 
-static int adp5061_set_charging_enabled(struct device *dev,
-					struct device_attribute *attr,
-					const char *buf, size_t count)
+static ssize_t adp5061_set_charging_enabled(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *buf, size_t count)
 {
 	struct power_supply *psy = dev_get_drvdata(dev);
 	struct adp5061_state *st = power_supply_get_drvdata(psy);
@@ -740,9 +740,9 @@ static int adp5061_set_charging_enabled(struct device *dev,
 	return count;
 }
 
-static int adp5061_get_chg_vlim_enabled(struct device *dev,
-					struct device_attribute *attr,
-					char *buf)
+static ssize_t adp5061_get_chg_vlim_enabled(struct device *dev,
+					    struct device_attribute *attr,
+					    char *buf)
 {
 	struct power_supply *psy = dev_get_drvdata(dev);
 	struct adp5061_state *st = power_supply_get_drvdata(psy);
@@ -757,9 +757,9 @@ static int adp5061_get_chg_vlim_enabled(struct device *dev,
 	return sprintf(buf, "%d\n", regval);
 }
 
-static int adp5061_set_chg_vlim_enabled(struct device *dev,
-					struct device_attribute *attr,
-					const char *buf, size_t count)
+static ssize_t adp5061_set_chg_vlim_enabled(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *buf, size_t count)
 {
 	struct power_supply *psy = dev_get_drvdata(dev);
 	struct adp5061_state *st = power_supply_get_drvdata(psy);

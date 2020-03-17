@@ -15,7 +15,7 @@
 	};
 
 	chosen {
-		linux,stdout-path = "/amba@0/uart@E0001000";
+		stdout-path = "/amba@0/uart@E0001000";
 	};
 
 	clocks {
@@ -128,11 +128,10 @@
 
 				dma-channel@0 {
 					reg = <0>;
-					adi,source-bus-width = <64>;
+					adi,source-bus-width = <32>;
 					adi,source-bus-type = <2>;
 					adi,destination-bus-width = <64>;
 					adi,destination-bus-type = <0>;
-					adi,length-width = <24>;
 				};
 			};
 		};
@@ -152,10 +151,8 @@
 					reg = <0>;
 					adi,source-bus-width = <64>;
 					adi,source-bus-type = <0>;
-					adi,destination-bus-width = <64>;
+					adi,destination-bus-width = <32>;
 					adi,destination-bus-type = <2>;
-					adi,length-width = <24>;
-					adi,cyclic;
 				};
 			};
 		};
@@ -183,6 +180,11 @@
 		mwipcore@43c00000 {
 			compatible = "mathworks,mwipcore-axi4lite-v1.00";
 			reg = <0x43c00000 0xffff>;
+		};
+
+		axi_sysid_0: axi-sysid-0@45000000 {
+			compatible = "adi,axi-sysid-1.00.a";
+			reg = <0x45000000 0x10000>;
 		};
 	};
 };
@@ -267,6 +269,7 @@
 
 		//adi,update-tx-gain-in-alert-enable;
 		adi,tx-attenuation-mdB = <10000>;
+		adi,tx-lo-powerdown-managed-enable;
 
 		adi,rf-rx-bandwidth-hz = <18000000>;
 		adi,rf-tx-bandwidth-hz = <18000000>;

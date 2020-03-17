@@ -83,6 +83,38 @@ static const struct axiadc_chip_info axiadc_chip_info_tbl[] = {
 		.channel[2] = AIM_CHAN(1, IIO_MOD_I, 2, 16, 'S'),
 		.channel[3] = AIM_CHAN(1, IIO_MOD_Q, 3, 16, 'S'),
 	},
+	[ID_ADRV9009_X2] = {
+		.name = "ADRV9009-X2",
+		.max_rate = 245760000,
+		.max_testmode = 0,
+		.num_channels = 8,
+		.scan_masks = NULL, /* FIXME: later */
+		.channel[0] = AIM_CHAN(0, IIO_MOD_I, 0, 16, 'S'),
+		.channel[1] = AIM_CHAN(0, IIO_MOD_Q, 1, 16, 'S'),
+		.channel[2] = AIM_CHAN(1, IIO_MOD_I, 2, 16, 'S'),
+		.channel[3] = AIM_CHAN(1, IIO_MOD_Q, 3, 16, 'S'),
+		.channel[4] = AIM_CHAN(2, IIO_MOD_I, 4, 16, 'S'),
+		.channel[5] = AIM_CHAN(2, IIO_MOD_Q, 5, 16, 'S'),
+		.channel[6] = AIM_CHAN(3, IIO_MOD_I, 6, 16, 'S'),
+		.channel[7] = AIM_CHAN(3, IIO_MOD_Q, 7, 16, 'S'),
+	},
+	[ID_ADRV90081] = {
+		.name = "ADRV9008-1",
+		.max_rate = 245760000,
+		.max_testmode = 0,
+		.num_channels = 4,
+		.scan_masks = adrv9009_available_scan_masks,
+		.channel[0] = AIM_CHAN(0, IIO_MOD_I, 0, 16, 'S'),
+		.channel[1] = AIM_CHAN(0, IIO_MOD_Q, 1, 16, 'S'),
+		.channel[2] = AIM_CHAN(1, IIO_MOD_I, 2, 16, 'S'),
+		.channel[3] = AIM_CHAN(1, IIO_MOD_Q, 3, 16, 'S'),
+	},
+	[ID_ADRV90082] = {
+		.name = "ADRV9008-2",
+		.max_rate = 245760000,
+		.max_testmode = 0,
+		.num_channels = 0,
+	},
 };
 
 static int adrv9009_read_raw(struct iio_dev *indio_dev,
@@ -136,7 +168,7 @@ int adrv9009_hdl_loopback(struct adrv9009_rf_phy *phy, bool enable)
 	version = axiadc_read(st, 0x4000);
 
 	/* Still there but implemented a bit different */
-	if (PCORE_VERSION_MAJOR(version) > 7)
+	if (ADI_AXI_PCORE_VER_MAJOR(version) > 7)
 		addr = 0x4418;
 	else
 		addr = 0x4414;
@@ -144,7 +176,7 @@ int adrv9009_hdl_loopback(struct adrv9009_rf_phy *phy, bool enable)
 	for (chan = 0; chan < conv->chip_info->num_channels; chan++) {
 		reg = axiadc_read(st, addr + (chan) * 0x40);
 
-		if (PCORE_VERSION_MAJOR(version) > 7) {
+		if (ADI_AXI_PCORE_VER_MAJOR(version) > 7) {
 			if (enable && reg != 0x8) {
 				conv->scratch_reg[chan] = reg;
 				reg = 0x8;
@@ -201,11 +233,14 @@ int adrv9009_register_axi_converter(struct adrv9009_rf_phy *phy)
 	struct axiadc_converter *conv;
 	struct spi_device *spi = phy->spi;
 
+	if (phy->spi_device_id == ID_ADRV90082)
+		return 0;
+
 	conv = devm_kzalloc(&spi->dev, sizeof(*conv), GFP_KERNEL);
 	if (conv == NULL)
 		return -ENOMEM;
 
-	conv->chip_info = &axiadc_chip_info_tbl[ID_ADRV9009];
+	conv->chip_info = &axiadc_chip_info_tbl[phy->spi_device_id];
 	conv->write_raw = adrv9009_write_raw;
 	conv->read_raw = adrv9009_read_raw;
 	conv->post_setup = adrv9009_post_setup;

@@ -35,7 +35,10 @@ enum debugfs_cmd {
 	DBGFS_INIT,
 	DBGFS_BIST_FRAMER_A_PRBS,
 	DBGFS_BIST_FRAMER_B_PRBS,
+	DBGFS_BIST_FRAMER_A_LOOPBACK,
+	DBGFS_BIST_FRAMER_B_LOOPBACK,
 	DBGFS_BIST_TONE,
+	DBGFS_GPIO3V3,
 };
 
 
@@ -46,7 +49,7 @@ enum adrv9009_bist_mode {
 };
 
 enum adrv9009_rx_ext_info {
-//	RSSI,
+	RSSI,
 	RX_QEC,
 	RX_HD2,
 	RX_RF_BANDWIDTH,
@@ -105,6 +108,7 @@ enum ad937x_device_id {
 	ID_ADRV9009,
 	ID_ADRV90081,
 	ID_ADRV90082,
+	ID_ADRV9009_X2,
 };
 
 enum adrv9009_sysref_req_mode {
@@ -177,6 +181,9 @@ struct adrv9009_rf_phy {
 	taliseTxAttenCtrlPin_t	tx2_atten_ctrl_pin;
 	taliseTxPaProtectCfg_t	tx_pa_protection;
 	taliseRxHd2Config_t	rx_hd2_config;
+	uint16_t		gpio3v3SrcCtrl;
+	uint16_t 		gpio3v3PinLevel;
+	uint16_t 		gpio3v3OutEn;
 
 	int16_t rxFirCoefs[72];
 	int16_t obsrxFirCoefs[72];
@@ -190,6 +197,9 @@ struct adrv9009_rf_phy {
 	struct adrv9009_hal	linux_hal;
 	struct clk 		*dev_clk;
 	struct clk 		*fmc_clk;
+	struct clk 		*fmc2_clk;
+	struct clk		*sysref_dev_clk;
+	struct clk		*sysref_fmc_clk;
 	struct clk 		*jesd_rx_clk;
 	struct clk 		*jesd_tx_clk;
 	struct clk 		*jesd_rx_os_clk;
@@ -198,7 +208,7 @@ struct adrv9009_rf_phy {
 	struct clk 		*clks[NUM_ADRV9009_CLKS];
 	struct adrv9009_clock	clk_priv[NUM_ADRV9009_CLKS];
 	struct clk_onecell_data	clk_data;
-	struct adrv9009_debugfs_entry debugfs_entry[338];
+	struct adrv9009_debugfs_entry debugfs_entry[342];
 	struct bin_attribute 	bin;
 	struct bin_attribute 	bin_gt;
 	struct iio_dev 		*indio_dev;
@@ -215,6 +225,8 @@ struct adrv9009_rf_phy {
 	bool			saved_radio_state;
 	u32			init_cal_mask;
 	u32			cal_mask;
+	bool			is_initialized;
+	int			spi_device_id;
 };
 
 int adrv9009_hdl_loopback(struct adrv9009_rf_phy *phy, bool enable);
@@ -222,5 +234,34 @@ int adrv9009_register_axi_converter(struct adrv9009_rf_phy *phy);
 struct adrv9009_rf_phy *adrv9009_spi_to_phy(struct spi_device *spi);
 int adrv9009_spi_read(struct spi_device *spi, u32 reg);
 int adrv9009_spi_write(struct spi_device *spi, u32 reg, u32 val);
+
+static inline bool has_tx(struct adrv9009_rf_phy *phy)
+{
+	return phy->spi_device_id != ID_ADRV90081;
+}
+
+static inline bool has_tx_and_en(struct adrv9009_rf_phy *phy)
+{
+	return has_tx(phy) && (phy->talInit.tx.txChannels != TAL_TXOFF) &&
+		!IS_ERR_OR_NULL(phy->jesd_tx_clk);
+}
+
+static inline bool has_obs_and_en(struct adrv9009_rf_phy *phy)
+{
+	return has_tx(phy) &&
+		(phy->talInit.obsRx.obsRxChannelsEnable != TAL_ORXOFF) &&
+		!IS_ERR_OR_NULL(phy->jesd_rx_os_clk);
+}
+
+static inline bool has_rx(struct adrv9009_rf_phy *phy)
+{
+	return phy->spi_device_id != ID_ADRV90082;
+}
+
+static inline bool has_rx_and_en(struct adrv9009_rf_phy *phy)
+{
+	return has_rx(phy) && (phy->talInit.rx.rxChannels != TAL_RXOFF) &&
+		!IS_ERR_OR_NULL(phy->jesd_rx_clk);
+}
 
 #endif

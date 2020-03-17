@@ -3,7 +3,7 @@
  *
  *\brief Contains Mykonos APIs for transceiver configuration and control
  *
- * Mykonos API version: 1.5.1.3565
+ * Mykonos API version: 1.5.2.3566
  */
 
 /**
@@ -1517,6 +1517,18 @@ mykonosErr_t MYKONOS_initSubRegisterTables(mykonosDevice_t *device)
         {
             return retVal;
         }
+    } else {
+	    /*
+	     * In order to use the OBS Framer successfully for some reason
+	     * it's required to enable also the main framer clock.
+	     * Make sure PCLK is set as low as possible because it interacts
+	     * with ORx Framer logic, even though Rx Framer disabled.
+	     */
+	    if ((device->obsRx->obsRxChannelsEnable != MYK_OBS_RXOFF) &&
+		    (device->profilesValid & (ORX_PROFILE_VALID | SNIFF_PROFILE_VALID))) {
+
+		CMB_SPIWriteByte(device->spiSettings, MYKONOS_ADDR_FRAMER_CLK_EN, 0x66);
+	   }
     }
 
     if ((device->obsRx->obsRxChannelsEnable != MYK_OBS_RXOFF) && (device->profilesValid & (ORX_PROFILE_VALID | SNIFF_PROFILE_VALID)))
@@ -16167,6 +16179,9 @@ mykonosErr_t MYKONOS_waitArmCmdStatus(mykonosDevice_t *device, uint8_t opCode, u
         {
             return MYKONOS_ERR_WAITARMCMDSTATUS_TIMEOUT;
         }
+
+        CMB_wait_ms(1);
+
     } while (*cmdStatByte & 0x01);
 
     return MYKONOS_ERR_OK;
@@ -17110,8 +17125,8 @@ mykonosErr_t MYKONOS_setRadioControlPinMode(mykonosDevice_t *device)
 }
 
 /**
- * \brief Sets the measure count which is the number of samples taken before DC offset correction is applied for the given Rf channel.
- *   This value cannot be changed after ARM initialization.
+ * \brief Sets the measure count which is the number of samples taken before DC offset correction is applied for the given RF channel.
+ *   This value should be changed after ARM initialization.
  *   channel can be one of the following ( ::mykonosDcOffsetChannels_t ).
  *
  *     Channel             |  Channel description
@@ -17128,8 +17143,8 @@ mykonosErr_t MYKONOS_setRadioControlPinMode(mykonosDevice_t *device)
  * - device->spiSettings->chipSelectIndex
  *
  * \param device Pointer to the Mykonos device data structure containing settings
- * \param channel receive channel to be selected.
- * \param measureCount value to be configured for the selected channel which is the number of samples taken before DC offset correction is applied.
+ * \param channel Receive channel to be selected.
+ * \param measureCount Value to be configured for the selected channel which is the number of samples taken before DC offset correction is applied.
  *
  * \retval MYKONOS_ERR_DC_OFFSET_INV_CHAN channel passed to the function is invalid, refer mykonosDcOffsetChannels_t enum for valid channels.
  * \retval MYKONOS_ERR_SET_RF_DC_OFFSET_INV_MEASURECNT measurement count value passed is invalid
