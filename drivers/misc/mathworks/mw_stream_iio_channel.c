@@ -391,6 +391,8 @@ static int mw_stream_setup_scan_type(struct iio_dev *indio_dev, struct device_no
 		dev_err(&mwchan->dev, "Invalid data-format specifier for %s\n", node->name);
 		return -EINVAL;
 	}
+        dev_dbg(&mwchan->dev, "In mw_stream_setup_scan_type: node_name=%s fmt=%s \n",node->name,fmt);
+
 	channel->scan_type.sign = sign;
 	channel->scan_type.storagebits = storagebits;
 	channel->scan_type.realbits = realbits;
@@ -406,6 +408,7 @@ static int mw_stream_setup_data_channels(struct iio_dev *indio_dev){
 	u32 scan_index = 0;
 	unsigned long *available_scan_masks;
 
+        dev_dbg(&mwchan->dev, "mw_stream_setup_data_channels\n");
 
 	for_each_child_of_node(mwchan->dev.of_node,data_node) {
 		status = of_device_is_compatible(data_node, mw_stream_iio_data_channel_compat);
@@ -498,6 +501,8 @@ static int devm_mw_stream_iio_register(struct iio_dev *indio_dev) {
 	if (status){
 		return status;
 	}
+        
+        dev_dbg(&mwchan->dev, "Device registration \n");
 
 	status = devm_iio_device_register(&mwchan->dev, indio_dev);
 	if(status)
