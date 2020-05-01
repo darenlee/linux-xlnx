@@ -91,7 +91,7 @@ static int mw_stream_iio_buffer_submit_block(struct iio_dma_buffer_queue *queue,
 static int mw_stream_iio_buffer_preenable(struct iio_dev *indio_dev)
 {
 	struct mw_stream_iio_chandev *mwchan = iio_priv(indio_dev);
-
+	int status = 0;
 	dev_dbg(&mwchan->dev, "buffer preenable\n");
 
 	switch(mwchan->reset_ip_mode) {
@@ -112,6 +112,12 @@ static int mw_stream_iio_buffer_preenable(struct iio_dev *indio_dev)
 		}
 		/* Set the TLAST count */
 		mw_ip_write32(mwchan->mwdev->mw_ip_info, mwchan->tlast_cntr_addr, indio_dev->buffer->length);
+	}
+	
+	status = mw_stream_change_channel_datatype(indio_dev);
+	if(status)
+	{
+		dev_dbg(&mwchan->dev, "mw_stream_change_channel_datatype returned %d\n",status);
 	}
 
 	return 0;
@@ -392,6 +398,73 @@ static int mw_stream_setup_scan_type(struct iio_dev *indio_dev, struct device_no
 		return -EINVAL;
 	}
         dev_dbg(&mwchan->dev, "In mw_stream_setup_scan_type: node_name=%s fmt=%s \n",node->name,fmt);
+
+	channel->scan_type.sign = sign;
+	channel->scan_type.storagebits = storagebits;
+	channel->scan_type.realbits = realbits;
+	channel->scan_type.shift = shift;
+	return 0;
+}
+
+
+
+static int mw_stream_change_channel_datatype(struct iio_dev *indio_dev){
+	struct mw_stream_iio_chandev *mwchan = iio_priv(indio_dev);
+	struct iio_chan_spec *channel;
+	struct device_node *data_node;
+	int status;
+	u32 scan_index = 0;
+	unsigned long *available_scan_masks;
+
+	dev_dbg(&mwchan->dev, "inside: mw_stream_change_channel_datatype\n");
+
+	for_each_child_of_node(mwchan->dev.of_node,data_node) {
+		channel = (struct iio_chan_spec *)&indio_dev->channels[scan_index];
+		if(channel->indexed == 1) {
+			dev_err(&mwchan->dev, "Duplicate 'reg' property in node %s: %d\n", data_node->name, scan_index);
+			return -EINVAL;
+		}
+		channel->indexed = 1;
+		channel->type = IIO_GENERIC_DATA;
+		if (mwchan->iio_direction == IIO_DEVICE_DIRECTION_OUT)
+			channel->output = 1;
+		channel->channel = scan_index;
+		channel->scan_index = scan_index;
+		status = of_property_read_string(data_node, "mathworks,chan-name", &channel->extend_name);
+		if (status)
+			channel->extend_name = NULL;
+		status = mw_stream_setup_scan_type_custom(indio_dev, data_node, channel);
+		if(status)
+			return status;
+	}
+
+}
+
+static int mw_stream_setup_scan_type_custom(struct iio_dev *indio_dev, struct device_node *node, struct iio_chan_spec *channel) {
+	struct mw_stream_iio_chandev *mwchan = iio_priv(indio_dev);
+	int status;
+	unsigned int storagebits, realbits, shift;
+	char sign;
+	/*
+	const char *fmt;
+	status = of_property_read_string(node, "mathworks,data-format", &fmt);
+	if(status) {
+		dev_err(&mwchan->dev, "Missing data-format specifier for %s\n", node->name);
+		return status;
+	}
+	status = sscanf(fmt, "%c%u/%u>>%u", &sign, &storagebits, &realbits, &shift);
+
+	if (status != 4) {
+		dev_err(&mwchan->dev, "Invalid data-format specifier for %s\n", node->name);
+		return -EINVAL;
+	}
+	dev_dbg(&mwchan->dev, "In mw_stream_setup_scan_type: node_name=%s fmt=%s \n",node->name,fmt);
+	*/
+	dev_dbg(&mwchan->dev, "In re-assigning channel to be 16-bit scan_type \n");
+	sign = 'u';
+	storagebits = 16;
+	realbits = 16;
+	shift = 0;
 
 	channel->scan_type.sign = sign;
 	channel->scan_type.storagebits = storagebits;
