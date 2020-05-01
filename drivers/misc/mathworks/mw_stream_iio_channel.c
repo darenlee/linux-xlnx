@@ -5,7 +5,7 @@
  *
  * Licensed under the GPL-2.
  */
-
+#define DEBUG 1
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
 #include <linux/iio/buffer_impl.h>
